@@ -2,7 +2,6 @@ import colour
 import numpy as np
 from scipy.optimize import minimize, differential_evolution
 import numba
-from numba import cuda
 
 # 物理常数
 h = 6.62607015e-34
@@ -93,37 +92,10 @@ def get_rf_rg_fast(std_sd, sd_values, TCS, CMFS1964):
                 xyz_d[k, i] += sd_values[j] * tcs * CMFS1964[j + 20, k]
     return xyz_s, xyz_d
 
-@cuda.jit
-def get_rf_rg_cuda(std_sd, sd_values, TCS, CMFS1964, xyz_s, xyz_d):
-    i = cuda.grid(1)
-    if i < 100:
-        for j in range(std_sd.shape[0]):
-            tcs = TCS[j, i]
-            for k in range(3):
-                cuda.atomic.add(xyz_s, (k, i), std_sd[j, 1] * tcs * CMFS1964[j + 20, k])
-                cuda.atomic.add(xyz_d, (k, i), sd_values[j] * tcs * CMFS1964[j + 20, k])
-
 def get_rf_rg(sd_data, T):
     std_sd = get_std_illuminant(T)
     sd_values = np.array([sd_data[wl] if wl in sd_data.wavelengths else 0.0 for wl in std_sd[:, 0]], dtype=np.float32)
-    # 预分配输出
-    xyz_s = np.zeros((3, 100), dtype=np.float32)
-    xyz_d = np.zeros((3, 100), dtype=np.float32)
-    # 拷贝到GPU
-    d_std_sd = cuda.to_device(std_sd.astype(np.float32))
-    d_sd_values = cuda.to_device(sd_values)
-    d_TCS = cuda.to_device(TCS.astype(np.float32))
-    d_CMFS1964 = cuda.to_device(CMFS1964.astype(np.float32))
-    d_xyz_s = cuda.to_device(xyz_s)
-    d_xyz_d = cuda.to_device(xyz_d)
-    # 启动kernel
-    threads_per_block = 32
-    blocks_per_grid = (100 + threads_per_block - 1) // threads_per_block
-    get_rf_rg_cuda[blocks_per_grid, threads_per_block](d_std_sd, d_sd_values, d_TCS, d_CMFS1964, d_xyz_s, d_xyz_d)
-    # 拷贝回主机
-    xyz_s = d_xyz_s.copy_to_host()
-    xyz_d = d_xyz_d.copy_to_host()
-    # 后续处理同原来
+    xyz_s, xyz_d = get_rf_rg_fast(std_sd.astype(np.float32), sd_values, TCS.astype(np.float32), CMFS1964.astype(np.float32))
     xyz_s_w = to_xyz1964(std_sd)
     arr = np.column_stack(
         (np.arange(380, 781), [sd_data[wl] if wl in sd_data.wavelengths else 0.0 for wl in range(380, 781)])
