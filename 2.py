@@ -187,31 +187,24 @@ def get_d65_spd():
     return colour.SDS_ILLUMINANTS["D65"]
 
 def calculate_mel_der(test_sd):
-    """计算mel-DER及详细过程"""
     mel_action = get_melanopsin_action_spectrum()
     v_lambda = get_photopic_luminous_efficiency()
     d65_sd = get_d65_spd()
-    test_mel_irradiance = 0.0
-    test_illuminance = 0.0
-    for wl in range(380, 781):
-        if wl in test_sd.wavelengths:
-            spd = test_sd[wl] * 1e-3
-            test_mel_irradiance += spd * mel_action[wl]
-            test_illuminance += spd * v_lambda[wl]
-    test_illuminance *= 683
+    # 只处理380-780nm
+    wl_arr = np.arange(380, 781)
+    test_vals = np.array([test_sd[wl] if wl in test_sd.wavelengths else 0.0 for wl in wl_arr]) * 1e-3
+    mel_arr = np.array([mel_action[wl] for wl in wl_arr])
+    v_arr = np.array([v_lambda[wl] for wl in wl_arr])
+    test_mel_irradiance = np.dot(test_vals, mel_arr)
+    test_illuminance = np.dot(test_vals, v_arr) * 683
     if test_illuminance <= 0:
         return 0, {"error": "测试光源照度为零"}
     test_mel_elr = test_mel_irradiance / test_illuminance
-    d65_mel_irradiance = 0.0
-    d65_illuminance = 0.0
-    test_total_radiance = sum(test_sd[wl] * 1e-3 for wl in test_sd.wavelengths)
+    test_total_radiance = np.sum(test_vals)
     d65_scaling = test_total_radiance / 100.0
-    for wl in range(380, 781):
-        if wl in d65_sd.wavelengths:
-            d65_value = d65_sd[wl] * d65_scaling
-            d65_mel_irradiance += d65_value * mel_action[wl]
-            d65_illuminance += d65_value * v_lambda[wl]
-    d65_illuminance *= 683
+    d65_vals = np.array([d65_sd[wl] if wl in d65_sd.wavelengths else 0.0 for wl in wl_arr]) * d65_scaling
+    d65_mel_irradiance = np.dot(d65_vals, mel_arr)
+    d65_illuminance = np.dot(d65_vals, v_arr) * 683
     if d65_illuminance <= 0:
         return 0, {"error": "D65照度计算错误"}
     d65_mel_elr = d65_mel_irradiance / d65_illuminance
@@ -290,11 +283,14 @@ def constraint_Rf(W):
     return metrics['Rf'] - 87.0
 
 def weighted_sum_sds(weights, sds):
-    # 直接用 numpy 合成后再构造 SpectralDistribution
     wavelengths = sds[0].wavelengths
-    values = np.zeros_like(wavelengths, dtype=float)
-    for w, sd in zip(weights, sds):
-        values += w * np.array([sd[wl] if wl in sd.wavelengths else 0.0 for wl in wavelengths])
+    # 构建所有光谱的二维数组
+    all_values = np.stack([
+        np.array([sd[wl] if wl in sd.wavelengths else 0.0 for wl in wavelengths])
+        for sd in sds
+    ])
+    # 矩阵乘法合成
+    values = np.dot(weights, all_values)
     return colour.SpectralDistribution(dict(zip(wavelengths, values)))
 
 
